@@ -8,11 +8,9 @@ import {
 } from "@solana/web3.js"
 import { getOrCreateKeypair, airdropSolIfNeeded } from "./utils"
 import {
-  SPL_ACCOUNT_COMPRESSION_PROGRAM_ID,
   ValidDepthSizePair,
   createAllocTreeIx,
   SPL_NOOP_PROGRAM_ID,
-  ConcurrentMerkleTreeAccount,
   deserializeChangeLogEventV1,
   createInitEmptyMerkleTreeIx,
   createAppendIx,
@@ -21,11 +19,7 @@ import base58 from "bs58"
 import crypto from "crypto"
 
 describe("Test Wallets", () => {
-  // Helius devnet RPC URL
-  const rpcUrl = process.env.RPC_URL
-
   // Connection to the devnet cluster
-  // const connection = new Connection(rpcUrl, "confirmed")
   const connection = new Connection(clusterApiUrl("devnet"), "confirmed")
 
   // New keypair that will be used to create the tree account
@@ -33,12 +27,10 @@ describe("Test Wallets", () => {
 
   // Declare wallet variable names
   let payer: Keypair
-  let wallet_2: Keypair
 
   before(async () => {
     // Use existing keypairs or generate new ones if they don't exist
     payer = await getOrCreateKeypair("wallet_1")
-    wallet_2 = await getOrCreateKeypair("wallet_2")
 
     // Request an airdrop of SOL to wallet_1 if its balance is less than 1 SOL
     await airdropSolIfNeeded(payer.publicKey)
@@ -98,6 +90,74 @@ describe("Test Wallets", () => {
 
   it("Append Leaf", async () => {
     const leafData = "hello world"
+
+    // Convert the leafData string to a buffer
+    const serializedLeafData = Buffer.from(leafData)
+
+    // Hash the leaf data
+    const hashedLeafData = crypto
+      .createHash("sha3-256")
+      .update(serializedLeafData)
+      .digest()
+
+    // Create a no-op instruction to log the original leaf data
+    const noopIx = new TransactionInstruction({
+      keys: [],
+      programId: SPL_NOOP_PROGRAM_ID,
+      data: serializedLeafData,
+    })
+
+    // Create an instruction to append the hashed leaf data to the tree
+    const appendIx = await createAppendIx(
+      treeKeypair.publicKey, // The address of the tree account to append to
+      payer.publicKey, // authority of the tree account
+      hashedLeafData
+    )
+
+    try {
+      // Create new transaction and add the instructions
+      const tx = new Transaction().add(noopIx, appendIx)
+
+      // Send the transaction
+      const txSignature = await sendAndConfirmTransaction(
+        connection,
+        tx,
+        [payer],
+        {
+          commitment: "confirmed",
+          skipPreflight: true,
+        }
+      )
+
+      console.log(
+        `https://explorer.solana.com/tx/${txSignature}?cluster=devnet`
+      )
+
+      // get the transaction info using the tx signature
+      const txInfo = await connection.getTransaction(txSignature, {
+        maxSupportedTransactionVersion: 0,
+      })
+
+      const noopLog = txInfo.transaction.message.compiledInstructions[0].data
+      console.log("leaf data:", noopLog.toString())
+
+      // Try to decode and deserialize the instruction
+      const changeLogEvent = deserializeChangeLogEventV1(
+        Buffer.from(
+          base58.decode(txInfo.meta.innerInstructions?.[0].instructions[0].data)
+        )
+      )
+
+      console.log("index: ", changeLogEvent.index)
+    } catch (err: any) {
+      console.error("\n", err)
+
+      throw err
+    }
+  })
+
+  it("Append Another Leaf", async () => {
+    const leafData = "Another Leaf"
 
     // Convert the leafData string to a buffer
     const serializedLeafData = Buffer.from(leafData)
